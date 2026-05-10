@@ -2,126 +2,117 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>彩の国 GPS追跡アプリ</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <style>
-        body { margin: 0; }
-        #map { height: 100vh; width: 100%; }
-        .menu {
-            position: absolute; top: 10px; left: 50px; z-index: 1000;
-            background: white; padding: 15px; border-radius: 8px; border: 2px solid #333;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        }
-        .status-ok { color: blue; font-weight: bold; }
-        .status-error { color: red; font-weight: bold; }
-        button { padding: 8px; margin-top: 5px; cursor: pointer; font-weight: bold; }
+        #map { height: 70vh; width: 100%; }
+        .controls { padding: 10px; background: #f8f9fa; display: flex; flex-direction: column; gap: 10px; }
+        .timer { font-weight: bold; color: #d9534f; }
+        .user-select { font-size: 1.1em; padding: 5px; }
     </style>
 </head>
 <body>
-
-    <div class="menu">
-        <div id="timer-display">自動更新: 停止中</div>
-        <div id="status-msg" class="status-ok">待機中</div>
-        <hr>
-        <div id="last-update">最終確認: --:--</div>
-        <button id="toggle-btn" onclick="toggleAutoMode()">自動更新を開始</button>
+    <div id="map"></div>
+    <div class="controls">
+        <div>
+            <label>自分はだれ？: </label>
+            <select id="user-name" class="user-select">
+                <option value="かっくん">かっくん</option>
+                <option value="のりちゃん">のりちゃん</option>
+                <option value="渋くん">渋くん</option>
+                <option value="原ちゃん">原ちゃん</option>
+                <option value="かくちゃん">かくちゃん</option>
+                <option value="ヨッシー">ヨッシー</option>
+            </select>
+        </div>
+        <button id="toggle-btn" onclick="toggleAutoMode()" style="padding: 15px;">自動送信を開始</button>
+        <div id="timer-display" class="timer">自動更新: 停止中</div>
     </div>
 
-    <div id="map"></div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
-
     <script>
-        // 1. 地図の土台（国土地理院）を作る
-        const map = L.map('map').setView([35.95, 139.2], 11);
-        L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
-            attribution: "地理院タイル"
-        }).addTo(map);
+        // --- データの箱の設定（テスト用） ---
+        const firebaseConfig = {
+            databaseURL: "https://sainokuni-gps-default-rtdb.firebaseio.com"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
 
-        // 2. GPXルートを表示する（あとでファイル名を合わせる場所）
-        // ※この下の 'sainokuni.gpx' を実際のファイル名に書き換えます
-        const gpxFile = '26Sainokuni-100mile.gpx'; 
+        // --- 地図の基本設定 ---
+        const map = L.map('map').setView([35.92, 139.15], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-        new L.GPX(gpxFile, {
+        // --- コースの読み込み ---
+        new L.GPX("26Sainokuni-100mile.gpx", {
             async: true,
-            polyline_options: {
-                color: 'red',      // コースの色（赤）
-                opacity: 0.8,      // 透明度
-                weight: 5          // 線の太さ
-            }
+            marker_options: { startIconUrl: null, endIconUrl: null, shadowUrl: null }
         }).on('loaded', function(e) {
-            // ルートが読み込まれたら、自動的にその場所へズームする
             map.fitBounds(e.target.getBounds());
         }).addTo(map);
 
-        // --- 以下、GPSとタイマーの処理 ---
-        let marker;
-        let autoMode = false;
-        let timerId;
-        let timeLeft = 600;
+        // --- 全員のピンを管理する場所 ---
+        const markers = {};
 
-        function getLocation() {
-            const statusDisp = document.getElementById('status-msg');
-            statusDisp.innerText = "位置取得中...";
-            
-            navigator.geolocation.getCurrentPosition(
-                function(position) {
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
+        // --- ネット上のデータを監視して、ピンを動かす ---
+        db.ref('locations').on('value', (snapshot) => {
+            const data = snapshot.val();
+            for (let name in data) {
+                const { lat, lon } = data[name];
+                if (markers[name]) {
+                    markers[name].setLatLng([lat, lon]);
+                } else {
+                    markers[name] = L.marker([lat, lon]).addTo(map).bindPopup(name);
+                }
+            }
+        });
 
-                    if (marker) map.removeLayer(marker);
-                    marker = L.marker([lat, lng]).addTo(map).bindPopup('最後に確認できた場所').openPopup();
-
-                    const now = new Date();
-                    document.getElementById('last-update').innerText = 
-                        "最終確認: " + now.getHours() + ":" + now.getMinutes().toString().padStart(2, '0');
-                    statusDisp.innerText = "取得成功";
-                    statusDisp.className = "status-ok";
-                },
-                function() {
-                    statusDisp.innerText = "圏外（取得失敗）";
-                    statusDisp.className = "status-error";
-                },
-                { timeout: 15000, enableHighAccuracy: true }
-            );
-        }
+        // --- 位置情報を送る機能 ---
+        let timerId = null;
+        let timeLeft = 600; // 10分
 
         function toggleAutoMode() {
-            autoMode = !autoMode;
             const btn = document.getElementById('toggle-btn');
-            if (autoMode) {
-                btn.innerText = "停止";
-                startTimer();
-                getLocation();
+            if (timerId) {
+                clearInterval(timerId);
+                timerId = null;
+                btn.innerText = "自動送信を開始";
+                btn.style.backgroundColor = "";
+                document.getElementById('timer-display').innerText = "自動更新: 停止中";
             } else {
-                btn.innerText = "自動更新を開始";
-                stopTimer();
+                sendLocation(); // 最初の一回を送信
+                startTimer();
+                btn.innerText = "送信を停止する";
+                btn.style.backgroundColor = "#ffcccc";
             }
-} // ここが toggleAutoMode の終わり
-
-        // --- 仲間の表示（関数の外に書く） ---
-        const friendA = L.marker([35.92, 139.15]).addTo(map).bindPopup('Aさん：頑張れ！');
-        const friendB = L.marker([35.95, 139.20]).addTo(map).bindPopup('Bさん');
-        const friendC = L.marker([35.90, 139.25]).addTo(map).bindPopup('Cさん');
+        }
 
         function startTimer() {
             timeLeft = 600;
             timerId = setInterval(() => {
                 timeLeft--;
-                const min = Math.floor(timeLeft / 60);
-                const sec = timeLeft % 60;
-                document.getElementById('timer-display').innerText = `次回まで: ${min}分${sec}秒`;
+                document.getElementById('timer-display').innerText = `次回の送信まで: ${Math.floor(timeLeft/60)}分${timeLeft%60}秒`;
                 if (timeLeft <= 0) {
-                    getLocation();
+                    sendLocation();
                     timeLeft = 600;
                 }
             }, 1000);
         }
 
-        function stopTimer() {
-            clearInterval(timerId);
-            document.getElementById('timer-display').innerText = "自動更新: 停止中";
+        function sendLocation() {
+            const name = document.getElementById('user-name').value;
+            navigator.geolocation.getCurrentPosition((position) => {
+                const { latitude, longitude } = position.coords;
+                // ネット上の箱に書き込む
+                db.ref('locations/' + name).set({
+                    lat: latitude,
+                    lon: longitude,
+                    time: new Date().toLocaleTimeString()
+                });
+            }, (err) => console.error(err), { enableHighAccuracy: true });
         }
     </script>
 </body>
