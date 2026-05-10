@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>彩の国 GPS追跡アプリ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; }
+        #map { height: 100vh; width: 100%; }
+        .menu {
+            position: absolute; top: 10px; left: 50px; z-index: 1000;
+            background: white; padding: 15px; border-radius: 8px; border: 2px solid #333;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+        }
+        .status-ok { color: blue; font-weight: bold; }
+        .status-error { color: red; font-weight: bold; }
+        button { padding: 8px; margin-top: 5px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="menu">
+        <div id="timer-display">自動更新: 停止中</div>
+        <div id="status-msg" class="status-ok">待機中</div>
+        <hr>
+        <div id="last-update">最終確認: --:--</div>
+        <button id="toggle-btn" onclick="toggleAutoMode()">自動更新を開始</button>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
+
+    <script>
+        // 1. 地図の土台（国土地理院）を作る
+        const map = L.map('map').setView([35.95, 139.2], 11);
+        L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+            attribution: "地理院タイル"
+        }).addTo(map);
+
+        // 2. GPXルートを表示する（あとでファイル名を合わせる場所）
+        // ※この下の 'sainokuni.gpx' を実際のファイル名に書き換えます
+        const gpxFile = '26Sainokuni-100mile.gpx'; 
+
+        new L.GPX(gpxFile, {
+            async: true,
+            polyline_options: {
+                color: 'red',      // コースの色（赤）
+                opacity: 0.8,      // 透明度
+                weight: 5          // 線の太さ
+            }
+        }).on('loaded', function(e) {
+            // ルートが読み込まれたら、自動的にその場所へズームする
+            map.fitBounds(e.target.getBounds());
+        }).addTo(map);
+
+        // --- 以下、GPSとタイマーの処理 ---
+        let marker;
+        let autoMode = false;
+        let timerId;
+        let timeLeft = 600;
+
+        function getLocation() {
+            const statusDisp = document.getElementById('status-msg');
+            statusDisp.innerText = "位置取得中...";
+            
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+
+                    if (marker) map.removeLayer(marker);
+                    marker = L.marker([lat, lng]).addTo(map).bindPopup('最後に確認できた場所').openPopup();
+
+                    const now = new Date();
+                    document.getElementById('last-update').innerText = 
+                        "最終確認: " + now.getHours() + ":" + now.getMinutes().toString().padStart(2, '0');
+                    statusDisp.innerText = "取得成功";
+                    statusDisp.className = "status-ok";
+                },
+                function() {
+                    statusDisp.innerText = "圏外（取得失敗）";
+                    statusDisp.className = "status-error";
+                },
+                { timeout: 15000, enableHighAccuracy: true }
+            );
+        }
+
+        function toggleAutoMode() {
+            autoMode = !autoMode;
+            const btn = document.getElementById('toggle-btn');
+            if (autoMode) {
+                btn.innerText = "停止";
+                startTimer();
+                getLocation();
+            } else {
+                btn.innerText = "自動更新を開始";
+                stopTimer();
+            }
+} // ここが toggleAutoMode の終わり
+
+        // --- 仲間の表示（関数の外に書く） ---
+        const friendA = L.marker([35.92, 139.15]).addTo(map).bindPopup('Aさん：頑張れ！');
+        const friendB = L.marker([35.95, 139.20]).addTo(map).bindPopup('Bさん');
+        const friendC = L.marker([35.90, 139.25]).addTo(map).bindPopup('Cさん');
+
+        function startTimer() {
+            timeLeft = 600;
+            timerId = setInterval(() => {
+                timeLeft--;
+                const min = Math.floor(timeLeft / 60);
+                const sec = timeLeft % 60;
+                document.getElementById('timer-display').innerText = `次回まで: ${min}分${sec}秒`;
+                if (timeLeft <= 0) {
+                    getLocation();
+                    timeLeft = 600;
+                }
+            }, 1000);
+        }
+
+        function stopTimer() {
+            clearInterval(timerId);
+            document.getElementById('timer-display').innerText = "自動更新: 停止中";
+        }
+    </script>
+</body>
+</html>
